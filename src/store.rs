@@ -28,7 +28,7 @@ impl KvStore {
             Err(_) => HashMap::new(),
         };
 
-        if let Err(_) = Self::compact(&map, &path) {
+        if let Err(_) = Self::compact(&map, &path) { //TODO decide how & when to run compaction
             eprintln!("Error during compact.")
         }
         let log = OpenOptions::new().create(true).append(true).open(path)?;
@@ -212,4 +212,96 @@ mod tests {
 
         cleanup(path);
     }
+
+    #[test]
+    fn test_compaction_preserves_latest_values() {
+        use tempfile::NamedTempFile;
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path();
+
+        {
+            let mut store = KvStore::new(path).unwrap();
+
+            store.set("key", b"v1".to_vec()).unwrap();
+            store.set("key", b"v2".to_vec()).unwrap();
+            store.set("key", b"v3".to_vec()).unwrap();
+        }
+
+        // reopening triggers compaction
+        let store = KvStore::new(path).unwrap();
+
+        let result = store.get("key");
+
+        assert_eq!(result, Some(b"v3".to_vec()));
+    }
+
+    #[test]
+    fn test_compaction_removes_deleted_keys() {
+        use tempfile::NamedTempFile;
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path();
+
+        {
+            let mut store = KvStore::new(path).unwrap();
+
+            store.set("key", b"value".to_vec()).unwrap();
+            store.delete("key").unwrap();
+        }
+
+        let store = KvStore::new(path).unwrap();
+
+        let result = store.get("key");
+
+        assert_eq!(result, None);
+    }
+    #[test]
+    fn test_compaction_reduces_log_size() {
+        use tempfile::NamedTempFile;
+        use std::fs;
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path();
+
+        {
+            let mut store = KvStore::new(path).unwrap();
+
+            for i in 0..100 {
+                store.set("key", format!("value{}", i).into_bytes()).unwrap();
+            }
+        }
+
+        let size_before = fs::metadata(path).unwrap().len();
+
+        // reopening triggers compaction
+        let _store = KvStore::new(path).unwrap();
+
+        let size_after = fs::metadata(path).unwrap().len();
+
+        assert!(size_after < size_before, "compaction did not reduce log size");
+    }
+
+    #[test]
+    fn test_compacted_log_is_replayable() {
+        use tempfile::NamedTempFile;
+
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path();
+
+        {
+            let mut store = KvStore::new(path).unwrap();
+
+            store.set("a", b"1".to_vec()).unwrap();
+            store.set("b", b"2".to_vec()).unwrap();
+            store.delete("a").unwrap();
+        }
+
+        // triggers compaction
+        let store = KvStore::new(path).unwrap();
+
+        assert_eq!(store.get("a"), None);
+        assert_eq!(store.get("b"), Some(b"2".to_vec()));
+    }
+
 }
