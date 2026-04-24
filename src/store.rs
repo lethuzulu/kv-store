@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::{Read, Write},
 };
-
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Command {
@@ -20,14 +20,18 @@ pub struct KvStore {
 }
 
 impl KvStore {
-    pub fn new<P: Into<String>>(path: P) -> Result<Self> {
-        let path = path.into();
-        let log = OpenOptions::new().create(true).append(true).open(&path)?;
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // let path = path.as_ref();
 
         let map = match Self::replay_log(&path) {
             Ok(m) => m,
             Err(_) => HashMap::new(),
         };
+
+        if let Err(_) = Self::compact(&map, &path) {
+            eprintln!("Error during compact.")
+        }
+        let log = OpenOptions::new().create(true).append(true).open(path)?;
         Ok(Self { map, log })
     }
 
@@ -64,7 +68,7 @@ impl KvStore {
         Ok(())
     }
 
-    fn replay_log(path: &str) -> Result<HashMap<String, Vec<u8>>> {
+    fn replay_log(path: impl AsRef<Path>) -> Result<HashMap<String, Vec<u8>>> {
         let mut log = OpenOptions::new().read(true).open(path)?;
 
         let mut map = HashMap::new();
@@ -87,6 +91,33 @@ impl KvStore {
 
         Ok(map)
     }
+    fn compact(map: &HashMap<String, Vec<u8>>, path: impl AsRef<Path>) -> Result<()> {
+        let temporary_path = path.as_ref().with_extension("tmp");
+        let mut temporary_log = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temporary_path)?;
+
+        for (key, value) in map {
+            let key = key.clone();
+            let value = value.clone();
+
+            let command = Command::Set { key, value };
+            Self::append_compact_command(&command, &mut temporary_log)?
+        }
+        temporary_log.sync_all()?;
+        std::fs::rename(temporary_path, path)?;
+        Ok(())
+    }
+
+    fn append_compact_command(command: &Command, file: &mut File) -> Result<()> {
+        let mut line = serde_json::to_string(command)?;
+        line.push('\n');
+        file.write_all(line.as_bytes())?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +125,7 @@ mod tests {
     use super::KvStore;
     use std::fs;
 
+    //TODO use tempfile crate to generate tempfile instead of testing with real files
     fn setup(path: &str) -> KvStore {
         let _ = fs::remove_file(path);
         KvStore::new(path).unwrap()
