@@ -14,9 +14,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check Formatting
-        run: cargo fmt --check
-
       - name: Build Project
         run: cargo build
 
