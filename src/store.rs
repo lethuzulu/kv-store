@@ -28,7 +28,8 @@ impl KvStore {
             Err(_) => HashMap::new(),
         };
 
-        if let Err(_) = Self::compact(&map, &path) { //TODO decide how & when to run compaction
+        if let Err(_) = Self::compact(&map, &path) {
+            //TODO decide how & when to run compaction
             eprintln!("Error during compact.")
         }
         let log = OpenOptions::new().create(true).append(true).open(path)?;
@@ -258,8 +259,8 @@ mod tests {
     }
     #[test]
     fn test_compaction_reduces_log_size() {
-        use tempfile::NamedTempFile;
         use std::fs;
+        use tempfile::NamedTempFile;
 
         let file = NamedTempFile::new().unwrap();
         let path = file.path();
@@ -268,7 +269,9 @@ mod tests {
             let mut store = KvStore::new(path).unwrap();
 
             for i in 0..100 {
-                store.set("key", format!("value{}", i).into_bytes()).unwrap();
+                store
+                    .set("key", format!("value{}", i).into_bytes())
+                    .unwrap();
             }
         }
 
@@ -279,7 +282,10 @@ mod tests {
 
         let size_after = fs::metadata(path).unwrap().len();
 
-        assert!(size_after < size_before, "compaction did not reduce log size");
+        assert!(
+            size_after < size_before,
+            "compaction did not reduce log size"
+        );
     }
 
     #[test]
@@ -303,5 +309,4 @@ mod tests {
         assert_eq!(store.get("a"), None);
         assert_eq!(store.get("b"), Some(b"2".to_vec()));
     }
-
 }
