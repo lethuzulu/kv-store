@@ -1,6 +1,6 @@
-use kv_store::store::KvStore;
+use kv_store::{server::TcpServer, store::KvStore};
 
 fn main() {
-    let store = KvStore::new("store.log").unwrap();
-    println!("store {:?}", store);
+    let mut tcp_server = TcpServer::new("localhost:5000").unwrap();
+    tcp_server.listen();
 }

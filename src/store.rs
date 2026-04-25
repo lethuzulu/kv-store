@@ -49,17 +49,24 @@ impl KvStore {
         let key = key.into();
         let value = value.into();
 
-        self.map.insert(key.clone(), value.clone());
-        self.append_command(&Command::Set { key, value })?;
+        self.append_command(&Command::Set {
+            key: key.clone(),
+            value: value.clone(),
+        })?;
+
+        self.map.insert(key, value);
         Ok(())
     }
 
-    pub fn delete<K: Into<String>>(&mut self, key: K) -> Result<()> {
+    pub fn delete<K: Into<String>>(&mut self, key: K) -> Result<bool> {
         let key = key.into();
 
-        self.map.remove(&key);
-        self.append_command(&Command::Delete { key })?;
-        Ok(())
+        self.append_command(&Command::Delete { key: key.clone() })?;
+
+        return match self.map.remove(&key) {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        };
     }
 
     fn append_command(&mut self, command: &Command) -> Result<()> {
