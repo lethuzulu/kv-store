@@ -1,8 +1,10 @@
+use crate::protocol::response::Response;
 use crate::protocol::{
-    Command, DeleteResponse, GetResponse, Request, Response, ResponseKind, deserialize_request,
+    Command, DeletePayload, GetPayload, Payload, Request, deserialize_request, serialize_response,
 };
 use crate::store::KvStore;
 use anyhow::Result;
+use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
@@ -24,7 +26,7 @@ impl TcpServer {
         for connection in self.inner.incoming() {
             match connection {
                 Ok(stream) => {
-                    Self::handle_connection(&stream, &mut self.store);
+                    Self::handle_connection(stream, &mut self.store);
                 }
                 Err(_) => {
                     println!("Error occurred. Listening for next connection");
@@ -33,69 +35,77 @@ impl TcpServer {
         }
     }
 
-    fn handle_connection(stream: &TcpStream, store: &mut KvStore) {
-        let mut buffer = String::new();
-        let mut reader = BufReader::new(stream);
+    fn handle_connection(stream: TcpStream, store: &mut KvStore) {
+        let mut line = String::new();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(&stream);
         loop {
-            reader.read_line(&mut buffer).unwrap();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("read error: {:?}", e);
+                    break;
+                }
+            }
+            let request = match deserialize_request(&line) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("deserialization error: {}", e);
+                    let serialized = match serialize_response(Err(e)) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("serialize error: {}", e);
+                            break;
+                        }
+                    };
+                    if let Err(e) = writer.write_all(&serialized) {
+                        eprintln!("write error: {}", e);
+                        break;
+                    }
+                    line.clear();
+                    continue;
+                }
+            };
 
-            let request = deserialize_request(&buffer).unwrap();
-            buffer.clear();
-            // let response = handler(request, store);
+            let result = handler(request, store); // if this returns an error, we should serialize that error that error must be structured. basically we should take the result as is and pass it along to be serialized
+
+            let serialized_response = match serialize_response(result) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("serialize error {}", e);
+                    break;
+                }
+            };
+
+            if let Err(e) = writer.write_all(&serialized_response) {
+                eprintln!("write error: {}", e);
+                break;
+            }
+            line.clear();
         }
     }
 }
 
-fn handler(request: Request, store: &mut KvStore) -> Response {
+fn handler(request: Request, store: &mut KvStore) -> Result<Response> {
     match request.cmd {
         Command::Set { key, value } => {
-            return match store.set(key, value) {
-                Ok(_) => Response {
-                    result: Ok(ResponseKind::Set),
-                }, // durability success
-                Err(_) => Response {
-                    result: Err("failure".to_string()),
-                }, // durability failure
-            };
+            store.set(key, value)?;
+            Ok(Payload::Set.into())
         }
-        Command::Get { key } => {
-            match store.get(key.as_str()) {
-                Some(t) => {
-                    return Response {
-                        result: Ok(ResponseKind::Get(GetResponse::Found(t))),
-                    };
-                } // retrieval success, key exists
-                None => {
-                    return Response {
-                        result: Ok(ResponseKind::Get(GetResponse::NotFound)),
-                    };
-                } // retrieval failure, key does not exist
-            }
-        }
+
         Command::Delete { key } => {
-            match store.delete(key) {
-                Ok(r) => {
-                    // durability success
-                    match r {
-                        true => {
-                            return Response {
-                                result: Ok(ResponseKind::Delete(DeleteResponse::Removed)),
-                            };
-                        }
-                        false => {
-                            return Response {
-                                result: Ok(ResponseKind::Delete(DeleteResponse::Removed)),
-                            };
-                        }
-                    }
-                }
-                Err(_) => {
-                    //durability failure
-                    return Response {
-                        result: Err("failure".to_string()),
-                    };
-                }
+            let b = store.delete(key)?;
+            if b {
+                Ok(DeletePayload::Removed.into())
+            } else {
+                Ok(DeletePayload::NotFound.into())
             }
         }
+
+        Command::Get { key } => match store.get(&key) {
+            Some(v) => Ok(GetPayload::Found(v).into()),
+            None => Ok(GetPayload::NotFound.into()),
+        },
     }
 }
